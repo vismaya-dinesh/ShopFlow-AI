@@ -1,0 +1,399 @@
+{
+  "name": "ShopFlow AI — Order Lookup",
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "21a594d3-c375-4c25-9b00-40ee83df835b",
+              "name": "status",
+              "value": "needs_review",
+              "type": "string"
+            },
+            {
+              "id": "4f25018b-32b6-4c26-a85e-53edbaa0b1d5",
+              "name": "reason",
+              "value": "Order lookup failed",
+              "type": "string"
+            },
+            {
+              "id": "6f5bfa76-ddd0-4c1c-b19f-fd6a3c66dbd4",
+              "name": "requires_human_review",
+              "value": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1936,
+        80
+      ],
+      "id": "50da83cc-153f-4906-a351-27c4b0059d6c",
+      "name": "Order Lookup Error"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a3d707de-71db-4797-ad25-bad3d2119daa",
+      "name": "Manual Test Trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ddea6516-9352-4a74-bd75-801a27d0c6d0",
+              "name": "order_id",
+              "value": "ORD-9999",
+              "type": "string"
+            },
+            {
+              "id": "fcba718f-53c3-49fb-ad25-eaa97730fe16",
+              "name": "customer_email",
+              "value": "alex@example.com",
+              "type": "string"
+            },
+            {
+              "id": "004a3bc0-4c0d-4cd3-8f04-127636933839",
+              "name": "customer_message",
+              "value": "Hi, could you please tell me the status of my order ORD-1002?",
+              "type": "string"
+            },
+            {
+              "id": "0299f797-b890-4237-8fda-bcf8a46677d4",
+              "name": "email_subject",
+              "value": "Order delivery status inquiry",
+              "type": "string"
+            },
+            {
+              "id": "df041d3e-021a-48bd-81db-793d049211f6",
+              "name": "received_at",
+              "value": "2026-10-19T10:00:00+04:00",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        304,
+        0
+      ],
+      "id": "43e94444-4b23-43ce-9c67-8a3165dfd075",
+      "name": "Customer Request Input"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5f5a4a44-d107-4b5c-84fb-9711b6b8e420",
+              "leftValue": "={{ $json.order_id }}",
+              "rightValue": "^ORD-[0-9]{4}$",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1104,
+        0
+      ],
+      "id": "b2eeace3-4aed-4689-b7eb-03200ce9733e",
+      "name": "Validate Order ID"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/orders/{{ $json.order_id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1616,
+        -16
+      ],
+      "id": "52169061-d348-4286-9842-59de635013b1",
+      "name": "Retrieve Order Details",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b977496a-b323-43b0-9f71-cfe5fd4cd906",
+              "name": "status",
+              "value": "rejected",
+              "type": "string"
+            },
+            {
+              "id": "2514b102-8eb9-4b4d-aabb-32497b2a06d0",
+              "name": "reason",
+              "value": "Invalid order ID format",
+              "type": "string"
+            },
+            {
+              "id": "d0d720a6-77d4-4e66-b186-3a5dc21a4923",
+              "name": "requires_human_review",
+              "value": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1520,
+        256
+      ],
+      "id": "a49eaf73-3e30-4aa4-842b-0b11edb162ef",
+      "name": "Invalid Input Response"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:11434/api/generate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "qwen2.5:3b"
+            },
+            {
+              "name": "prompt",
+              "value": "=={{ \n  \"Classify this customer support message. Do not answer the customer. Return only one JSON object with keys intent, urgency, requires_human_review. \" +\n  \"intent must be one of: delivery, delayed_delivery, refund, damaged_item, cancellation, other. \" +\n  \"urgency must be one of: low, medium, high. \" +\n  \"requires_human_review must be true or false.\\n\" +\n  \"Subject: \" + $json.email_subject + \"\\n\" +\n  \"Message: \" + $json.customer_message\n}}"
+            },
+            {
+              "name": "stream",
+              "value": "={{ false }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        720,
+        0
+      ],
+      "id": "9c483353-ac3c-49b7-868b-2b3eb6abb8b0",
+      "name": "AI Classification"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        912,
+        304
+      ],
+      "id": "2930883a-ac27-4661-be6a-a4523b63e222",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "07d54d9d-d489-444c-9360-c8eb30398211",
+              "name": "order_id",
+              "value": "={{ $json.order_id }}",
+              "type": "string"
+            },
+            {
+              "id": "d81f7aff-695a-46d5-8e6a-f888755636db",
+              "name": "item_name",
+              "value": "={{ $json.item_name }}",
+              "type": "string"
+            },
+            {
+              "id": "d0d461e4-0858-43e5-9544-a19828a17982",
+              "name": "order_status",
+              "value": "={{ $json.order_status }}",
+              "type": "string"
+            },
+            {
+              "id": "b845026e-a893-4cb0-a0a3-3c13c3737015",
+              "name": "expected_delivery",
+              "value": "={{ $json.expected_delivery }}",
+              "type": "string"
+            },
+            {
+              "id": "f7c6b3df-b25a-4009-bdee-4208d639031e",
+              "name": "total_amount",
+              "value": "={{ $json.total_amount }}",
+              "type": "number"
+            },
+            {
+              "id": "c91f986f-d51f-44de-a0de-c653888b7f1b",
+              "name": "currency",
+              "value": "={{ $json.currency }}",
+              "type": "string"
+            },
+            {
+              "id": "b22cdb5e-8cdd-41ee-844f-abb71ffbe020",
+              "name": "intent",
+              "value": "={{ JSON.parse($('Merge').first().json.response).intent }}",
+              "type": "string"
+            },
+            {
+              "id": "05319ad0-6674-40de-9fca-61d52ca5469f",
+              "name": "urgency",
+              "value": "={{ JSON.parse($('Merge').first().json.response).urgency }}",
+              "type": "string"
+            },
+            {
+              "id": "a868e70b-4c99-4980-9334-22a667c5c549",
+              "name": "requires_human_review",
+              "value": "={{ JSON.parse($('Merge').first().json.response).requires_human_review }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1936,
+        -128
+      ],
+      "id": "0402ff4b-eb08-49af-82e6-30f1d7418d44",
+      "name": "Format Order Response"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Test Trigger": {
+      "main": [
+        [
+          {
+            "node": "Customer Request Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Customer Request Input": {
+      "main": [
+        [
+          {
+            "node": "AI Classification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Order ID": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Order Details",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Invalid Input Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Order Details": {
+      "main": [
+        [
+          {
+            "node": "Format Order Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Order Lookup Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Classification": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Validate Order ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "4cd97726-a7ea-4637-85b0-b97a11394990",
+  "meta": {
+    "instanceId": "18b971230e5476ef2a18d3df8d341e6f4688d0e7563565c743f40539fd4372b0"
+  },
+  "nodeGroups": [],
+  "id": "P2uv9eblKJ9ZZqF4",
+  "tags": []
+}
