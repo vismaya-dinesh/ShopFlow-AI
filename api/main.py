@@ -13,7 +13,32 @@ from api.database import (
     get_review_cases,
     get_review_case,
     mark_review_case_completed,
+    get_review_analytics,
 )
+
+import json
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_evaluation_report(filename: str) -> dict:
+    report_path = PROJECT_ROOT / filename
+
+    if not report_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Evaluation report not found: {filename}",
+        )
+
+    try:
+        with report_path.open("r", encoding="utf-8") as file:
+            return json.load(file)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Invalid JSON in evaluation report: {filename}",
+        ) from exc
 
 
 @asynccontextmanager
@@ -182,3 +207,19 @@ def complete_review_case(review_id: int):
         )
 
     return completed_case
+
+
+@app.get("/analytics")
+def read_review_analytics():
+    return get_review_analytics()
+
+@app.get("/evaluation")
+def get_evaluation_reports():
+    return {
+        "ai_evaluation": load_evaluation_report(
+            "ai_evaluation_report.json"
+        ),
+        "edge_case_evaluation": load_evaluation_report(
+            "edge_case_evaluation_report.json"
+        ),
+    }

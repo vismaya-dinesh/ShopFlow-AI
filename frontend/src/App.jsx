@@ -1,8 +1,30 @@
 
 import { useState } from 'react'
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+} from 'recharts'
 import './App.css'
 
 const API_URL = 'http://localhost:8000'
+
+const CHART_COLORS = [
+  '#8b7cf6',
+  '#42c6a5',
+  '#f5b85c',
+  '#ed7896',
+  '#6eb5e8',
+  '#b8a1e3',
+]
 
 const sampleMessages = [
   "My order ORD-1002 hasn't arrived. Can you check it?",
@@ -28,6 +50,14 @@ function App() {
   const [completingReviewId, setCompletingReviewId] = useState(null)
   const [reviewFilter, setReviewFilter] = useState('pending')
 
+  const [analyticsData, setAnalyticsData] = useState(null)
+  const [analyticsError, setAnalyticsError] = useState('')
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
+
+  const [evaluationData, setEvaluationData] = useState(null)
+  const [evaluationError, setEvaluationError] = useState('')
+  const [isLoadingEvaluation, setIsLoadingEvaluation] = useState(false)
+
   async function handleOrderSearch(event) {
     event.preventDefault()
 
@@ -42,7 +72,6 @@ function App() {
       const response = await fetch(
         `${API_URL}/orders/${encodeURIComponent(id)}`
       )
-
       const data = await response.json()
 
       if (!response.ok) {
@@ -93,9 +122,12 @@ function App() {
           : 'Not required',
       })
 
-      // Refresh the queue if the backend saved a human-review case.
       if (data.requires_human_review) {
         loadReviewCases()
+
+        if (activeView === 'analytics') {
+          loadAnalytics()
+        }
       }
     } catch (error) {
       console.error('Classification error:', error)
@@ -135,6 +167,61 @@ function App() {
     }
   }
 
+  async function loadAnalytics() {
+    setIsLoadingAnalytics(true)
+    setAnalyticsError('')
+
+    try {
+      const response = await fetch(`${API_URL}/analytics`)
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Could not load analytics.')
+      }
+
+      setAnalyticsData(data)
+    } catch (error) {
+      setAnalyticsError(
+        error instanceof TypeError
+          ? 'Could not connect to the backend. Make sure FastAPI is running.'
+          : error.message
+      )
+    } finally {
+      setIsLoadingAnalytics(false)
+    }
+  }
+
+  async function loadEvaluation() {
+    setIsLoadingEvaluation(true)
+    setEvaluationError('')
+
+    try {
+      const response = await fetch(`${API_URL}/evaluation`)
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || 'Could not load evaluation reports.'
+        )
+      }
+
+      setEvaluationData(data)
+    } catch (error) {
+      setEvaluationError(
+        error instanceof TypeError
+          ? 'Could not connect to the backend. Make sure FastAPI is running.'
+          : error.message
+      )
+    } finally {
+      setIsLoadingEvaluation(false)
+    }
+  }
+
+  function openEvaluation() {
+    setActiveView('evaluation')
+    loadEvaluation()
+  }
+
   async function handleCompleteReview(reviewId) {
     if (completingReviewId !== null) return
 
@@ -146,19 +233,21 @@ function App() {
         `${API_URL}/review-cases/${reviewId}/complete`,
         { method: 'POST' }
       )
-
       const data = await response.json()
 
       if (!response.ok) {
         throw new Error(data.detail || 'Could not complete this review.')
       }
 
-      // Update the case locally using the server's response.
       setReviewCases((currentCases) =>
         currentCases.map((reviewCase) =>
           reviewCase.review_id === reviewId ? data : reviewCase
         )
       )
+
+      if (activeView === 'analytics') {
+        loadAnalytics()
+      }
     } catch (error) {
       setReviewError(
         error instanceof TypeError
@@ -175,6 +264,11 @@ function App() {
     loadReviewCases()
   }
 
+  function openAnalytics() {
+    setActiveView('analytics')
+    loadAnalytics()
+  }
+
   const pendingCount = reviewCases.filter(
     (reviewCase) => reviewCase.review_status === 'pending'
   ).length
@@ -184,6 +278,35 @@ function App() {
       ? true
       : reviewCase.review_status === reviewFilter
   )
+
+  const evaluationReports = evaluationData
+    ? [
+        {
+          key: 'ai',
+          title: 'AI evaluation',
+          report: evaluationData.ai_evaluation,
+          description: 'Standard classification benchmark',
+        },
+        {
+          key: 'edge',
+          title: 'Edge-case evaluation',
+          report: evaluationData.edge_case_evaluation,
+          description: 'Challenging and unusual customer messages',
+        },
+      ].filter((item) => item.report)
+    : []
+
+  function getMetric(report, field) {
+    const nestedValue = report?.[field]?.accuracy_percent
+    const flatValue = report?.[`${field}_accuracy_percent`]
+
+    const value = nestedValue ?? flatValue
+    return typeof value === 'number' ? value : null
+  }
+
+  function formatAccuracy(value) {
+    return value === null ? 'N/A' : `${value.toFixed(1)}%`
+  }
 
   return (
     <div className="app-shell">
@@ -222,6 +345,20 @@ function App() {
           )}
         </button>
 
+        <button
+          className={`nav-item ${activeView === 'analytics' ? 'active' : ''}`}
+          onClick={openAnalytics}
+        >
+          ◫ <span>Analytics</span>
+        </button>
+
+        <button
+          className={`nav-item ${activeView === 'evaluation' ? 'active' : ''}`}
+          onClick={openEvaluation}
+        >
+          ◉ <span>AI Evaluation</span>
+        </button>
+
         <div className="sidebar-bottom">
           <span className="status-dot" />
           Local development
@@ -231,7 +368,6 @@ function App() {
 
       <main className="main-content">
         <div key={activeView} className="view-transition">
-
           {/* ORDER LOOKUP */}
           {activeView === 'orders' ? (
             <section className="panel order-lookup-panel">
@@ -344,15 +480,13 @@ function App() {
                   <div className="empty-icon">▣</div>
                   <h3>Ready to find an order</h3>
                   <p>
-                    Search using an order ID to see its product, status,
-                    payment, and delivery information.
+                    Search using an order ID to see its product, status, payment,
+                    and delivery information.
                   </p>
                 </div>
               )}
             </section>
-
           ) : activeView === 'reviews' ? (
-
             /* HUMAN REVIEW QUEUE */
             <>
               <header className="topbar">
@@ -370,8 +504,8 @@ function App() {
                   <p className="eyebrow">HUMAN-IN-THE-LOOP WORKFLOW</p>
                   <h2>Keep people in the loop.</h2>
                   <p>
-                    Review customer messages flagged by the AI before
-                    considering them handled.
+                    Review customer messages flagged by the AI before considering
+                    them handled.
                   </p>
                 </div>
                 <div className="welcome-icon">✓</div>
@@ -389,9 +523,11 @@ function App() {
                   <span className="metric-icon">✓</span>
                   <p>Reviewed cases</p>
                   <h3>
-                    {reviewCases.filter(
-                      (item) => item.review_status === 'reviewed'
-                    ).length}
+                    {
+                      reviewCases.filter(
+                        (item) => item.review_status === 'reviewed'
+                      ).length
+                    }
                   </h3>
                   <span className="metric-note">Completed reviews</span>
                 </article>
@@ -410,7 +546,6 @@ function App() {
                     <p className="eyebrow">CASE MANAGEMENT</p>
                     <h2>Customer cases</h2>
                   </div>
-
                   <button
                     className="clear-button"
                     type="button"
@@ -500,7 +635,6 @@ function App() {
                                 : 'Reviewed'}
                             </span>
                           </div>
-
                           <span
                             className={`urgency-badge ${reviewCase.urgency.toLowerCase()}`}
                           >
@@ -515,7 +649,9 @@ function App() {
                         <div className="review-case-details">
                           <div>
                             <span>Predicted intent</span>
-                            <strong>{reviewCase.intent.replaceAll('_', ' ')}</strong>
+                            <strong>
+                              {reviewCase.intent.replaceAll('_', ' ')}
+                            </strong>
                           </div>
                           <div>
                             <span>Created</span>
@@ -557,9 +693,517 @@ function App() {
                 <span>AI-assisted support · Human oversight matters</span>
               </footer>
             </>
+          ) : activeView === 'analytics' ? (
+            /* ANALYTICS DASHBOARD */
+            <>
+              <header className="topbar">
+                <div>
+                  <p className="eyebrow">CUSTOMER OPERATIONS / INSIGHTS</p>
+                  <h1>Analytics dashboard</h1>
+                </div>
+                <div className="environment-tag">
+                  <span className="status-dot" /> Live database metrics
+                </div>
+              </header>
 
+              <section className="welcome">
+                <div>
+                  <p className="eyebrow">HUMAN REVIEW ANALYTICS</p>
+                  <h2>Understand your support workload.</h2>
+                  <p>
+                    Explore review volume, case status, intent patterns, and
+                    high-urgency cases using your saved review data.
+                  </p>
+                </div>
+                <div className="welcome-icon">◫</div>
+              </section>
+
+              {analyticsError && (
+                <div className="review-error analytics-error" role="alert">
+                  <strong>Could not load analytics</strong>
+                  <p>{analyticsError}</p>
+                  <button
+                    className="clear-button"
+                    type="button"
+                    onClick={loadAnalytics}
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
+
+              {isLoadingAnalytics && !analyticsData ? (
+                <section className="panel analytics-message">
+                  <span className="loading-spinner" />
+                  <p>Loading analytics...</p>
+                </section>
+              ) : analyticsData ? (
+                <>
+                  <section className="metrics analytics-metrics">
+                    <article className="metric-card">
+                      <span className="metric-icon">▤</span>
+                      <p>Total review cases</p>
+                      <h3>{analyticsData.total_cases}</h3>
+                      <span className="metric-note">All saved cases</span>
+                    </article>
+
+                    <article className="metric-card">
+                      <span className="metric-icon">⌁</span>
+                      <p>Pending cases</p>
+                      <h3>{analyticsData.pending_cases}</h3>
+                      <span className="metric-note">Awaiting human review</span>
+                    </article>
+
+                    <article className="metric-card">
+                      <span className="metric-icon">✓</span>
+                      <p>Reviewed cases</p>
+                      <h3>{analyticsData.reviewed_cases}</h3>
+                      <span className="metric-note">Marked as reviewed</span>
+                    </article>
+
+                    <article className="metric-card">
+                      <span className="metric-icon">%</span>
+                      <p>Review rate</p>
+                      <h3>
+                        {analyticsData.total_cases > 0
+                          ? `${(
+                              (analyticsData.reviewed_cases /
+                                analyticsData.total_cases) *
+                              100
+                            ).toFixed(1)}%`
+                          : '0.0%'}
+                      </h3>
+                      <span className="metric-note">
+                        Share of cases marked as reviewed
+                      </span>
+                    </article>
+
+                    <article className="metric-card">
+                      <span className="metric-icon">!</span>
+                      <p>High-urgency cases</p>
+                      <h3>{analyticsData.high_urgency_cases}</h3>
+                      <span className="metric-note">
+                        Flagged as high urgency
+                      </span>
+                    </article>
+                  </section>
+
+                  <div className="analytics-chart-grid">
+                    <section className="panel analytics-chart-panel">
+                      <div className="panel-heading">
+                        <div>
+                          <p className="eyebrow">INTENT BREAKDOWN</p>
+                          <h2>Cases by intent</h2>
+                        </div>
+                      </div>
+
+                      {analyticsData.intent_distribution.length === 0 ? (
+                        <div className="analytics-empty">
+                          <p>No review cases available to chart yet.</p>
+                        </div>
+                      ) : (
+                        <div className="analytics-chart">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie
+                                data={analyticsData.intent_distribution}
+                                dataKey="count"
+                                nameKey="intent"
+                                cx="50%"
+                                cy="50%"
+                                outerRadius="72%"
+                                innerRadius="42%"
+                                paddingAngle={3}
+                                label={({ name, percent }) =>
+                                  `${name.replaceAll('_', ' ')} ${(percent * 100).toFixed(0)}%`
+                                }
+                              >
+                                {analyticsData.intent_distribution.map(
+                                  (entry, index) => (
+                                    <Cell
+                                      key={entry.intent}
+                                      fill={
+                                        CHART_COLORS[
+                                          index % CHART_COLORS.length
+                                        ]
+                                      }
+                                    />
+                                  )
+                                )}
+                              </Pie>
+                              <Tooltip />
+                              <Legend />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                    </section>
+
+                    <section className="panel analytics-chart-panel">
+                      <div className="panel-heading">
+                        <div>
+                          <p className="eyebrow">REVIEW WORKLOAD</p>
+                          <h2>Case status breakdown</h2>
+                        </div>
+                      </div>
+
+                      {analyticsData.status_distribution.length === 0 ? (
+                        <div className="analytics-empty">
+                          <p>No review cases available to chart yet.</p>
+                        </div>
+                      ) : (
+                        <div className="analytics-chart">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart
+                              data={analyticsData.status_distribution}
+                              margin={{
+                                top: 12,
+                                right: 12,
+                                left: 0,
+                                bottom: 8,
+                              }}
+                            >
+                              <CartesianGrid
+                                strokeDasharray="3 3"
+                                vertical={false}
+                                stroke="#34384a"
+                              />
+                              <XAxis
+                                dataKey="status"
+                                tick={{ fill: '#a5a9bd', fontSize: 12 }}
+                                axisLine={false}
+                                tickLine={false}
+                              />
+                              <YAxis
+                                allowDecimals={false}
+                                tick={{ fill: '#a5a9bd', fontSize: 12 }}
+                                axisLine={false}
+                                tickLine={false}
+                              />
+                              <Tooltip />
+                              <Bar
+                                dataKey="count"
+                                name="Cases"
+                                fill="#8b7cf6"
+                                radius={[6, 6, 0, 0]}
+                              />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+
+                  <section className="panel analytics-table-panel">
+                    <div className="panel-heading">
+                      <div>
+                        <p className="eyebrow">RAW METRICS</p>
+                        <h2>Intent summary</h2>
+                      </div>
+                      <button
+                        className="clear-button"
+                        type="button"
+                        onClick={loadAnalytics}
+                        disabled={isLoadingAnalytics}
+                      >
+                        {isLoadingAnalytics ? 'Refreshing...' : '↻ Refresh'}
+                      </button>
+                    </div>
+
+                    {analyticsData.intent_distribution.length === 0 ? (
+                      <div className="analytics-empty">
+                        <p>No intent data to display yet.</p>
+                      </div>
+                    ) : (
+                      <div className="analytics-table-wrap">
+                        <table className="analytics-table">
+                          <thead>
+                            <tr>
+                              <th>Intent</th>
+                              <th>Number of cases</th>
+                              <th>Share of cases</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {analyticsData.intent_distribution.map((item) => (
+                              <tr key={item.intent}>
+                                <td>{item.intent.replaceAll('_', ' ')}</td>
+                                <td>{item.count}</td>
+                                <td>
+                                  {analyticsData.total_cases > 0
+                                    ? `${(
+                                        (item.count /
+                                          analyticsData.total_cases) *
+                                        100
+                                      ).toFixed(1)}%`
+                                    : '0.0%'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </section>
+                </>
+              ) : (
+                <section className="panel analytics-message">
+                  <h3>No analytics data loaded</h3>
+                  <p>
+                    Refresh to fetch the latest metrics from your backend.
+                  </p>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={loadAnalytics}
+                  >
+                    Load analytics
+                  </button>
+                </section>
+              )}
+
+              <footer>
+                <span>ShopFlow AI</span>
+                <span>Insights from saved human-review cases</span>
+              </footer>
+            </>
+          ) : activeView === 'evaluation' ? (
+            /* AI EVALUATION */
+            <>
+              <header className="topbar">
+                <div>
+                  <p className="eyebrow">MODEL QUALITY / EVALUATION</p>
+                  <h1>AI Evaluation</h1>
+                </div>
+                <div className="environment-tag">
+                  <span className="status-dot" /> Local Qwen model
+                </div>
+              </header>
+
+              <section className="welcome">
+                <div>
+                  <p className="eyebrow">CLASSIFICATION BENCHMARKS</p>
+                  <h2>Measure model performance.</h2>
+                  <p>
+                    Explore classification accuracy across your standard
+                    evaluation set and challenging edge cases.
+                  </p>
+                </div>
+                <div className="welcome-icon">◉</div>
+              </section>
+
+              {evaluationError && (
+                <div className="review-error analytics-error" role="alert">
+                  <strong>Could not load evaluation reports</strong>
+                  <p>{evaluationError}</p>
+                  <button
+                    className="clear-button"
+                    type="button"
+                    onClick={loadEvaluation}
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
+
+              {isLoadingEvaluation && !evaluationData ? (
+                <section className="panel analytics-message">
+                  <span className="loading-spinner" />
+                  <p>Loading evaluation reports...</p>
+                </section>
+              ) : evaluationReports.length > 0 ? (
+                <>
+                  {evaluationReports.map(({ key, title, report, description }) => {
+                    const intentAccuracy = getMetric(report, 'intent')
+                    const urgencyAccuracy = getMetric(report, 'urgency')
+                    const reviewAccuracy = getMetric(report, 'human_review')
+                    const allFieldsAccuracy = getMetric(report, 'all_fields')
+
+                    return (
+                      <section
+                        className="panel evaluation-panel"
+                        key={key}
+                      >
+                        <div className="panel-heading">
+                          <div>
+                            <p className="eyebrow">BENCHMARK RESULTS</p>
+                            <h2>{title}</h2>
+                            <p className="muted">{description}</p>
+                          </div>
+                          <span className="evaluation-model">
+                            {report.model || 'Model not specified'}
+                          </span>
+                        </div>
+
+                        <section className="metrics evaluation-metrics">
+                          <article className="metric-card">
+                            <span className="metric-icon">▤</span>
+                            <p>Test cases</p>
+                            <h3>{report.total_cases ?? 'N/A'}</h3>
+                            <span className="metric-note">
+                              Evaluated messages
+                            </span>
+                          </article>
+
+                          <article className="metric-card">
+                            <span className="metric-icon">✓</span>
+                            <p>Intent accuracy</p>
+                            <h3>{formatAccuracy(intentAccuracy)}</h3>
+                            <span className="metric-note">
+                              Correct intent predictions
+                            </span>
+                          </article>
+
+                          <article className="metric-card">
+                            <span className="metric-icon">↗</span>
+                            <p>Urgency accuracy</p>
+                            <h3>{formatAccuracy(urgencyAccuracy)}</h3>
+                            <span className="metric-note">
+                              Correct urgency predictions
+                            </span>
+                          </article>
+
+                          <article className="metric-card">
+                            <span className="metric-icon">⌁</span>
+                            <p>Human-review accuracy</p>
+                            <h3>{formatAccuracy(reviewAccuracy)}</h3>
+                            <span className="metric-note">
+                              Correct review decisions
+                            </span>
+                          </article>
+
+                          <article className="metric-card">
+                            <span className="metric-icon">◎</span>
+                            <p>All-fields accuracy</p>
+                            <h3>{formatAccuracy(allFieldsAccuracy)}</h3>
+                            <span className="metric-note">
+                              All three fields correct
+                            </span>
+                          </article>
+                        </section>
+
+                        {Array.isArray(report.results) && (
+                          <div className="evaluation-results">
+                            <div className="panel-heading">
+                              <div>
+                                <p className="eyebrow">CASE-BY-CASE RESULTS</p>
+                                <h3>Evaluation details</h3>
+                              </div>
+                              <span className="evaluation-count">
+                                {report.results.length} cases
+                              </span>
+                            </div>
+
+                            <div className="evaluation-table-wrap">
+                              <table className="analytics-table evaluation-table">
+                                <thead>
+                                  <tr>
+                                    <th>Customer message</th>
+                                    <th>Expected intent</th>
+                                    <th>Predicted intent</th>
+                                    <th>All fields</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {report.results.map((item, index) => (
+                                    <tr key={`${key}-${index}`}>
+                                      <td>{item.message}</td>
+                                      <td>
+                                        {item.expected?.intent ?? 'N/A'}
+                                      </td>
+                                      <td>
+                                        {item.predicted?.intent ?? 'N/A'}
+                                      </td>
+                                      <td>
+                                        <span
+                                          className={
+                                            item.checks?.all_fields_passed
+                                              ? 'evaluation-pass'
+                                              : 'evaluation-fail'
+                                          }
+                                        >
+                                          {item.checks?.all_fields_passed
+                                            ? 'Passed'
+                                            : 'Failed'}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </section>
+                    )
+                  })}
+
+                  <section className="panel evaluation-panel">
+                    <div className="panel-heading">
+                      <div>
+                        <p className="eyebrow">ABOUT THE METRICS</p>
+                        <h2>How to read these results</h2>
+                      </div>
+                      <button
+                        className="clear-button"
+                        type="button"
+                        onClick={loadEvaluation}
+                        disabled={isLoadingEvaluation}
+                      >
+                        {isLoadingEvaluation ? 'Refreshing...' : '↻ Refresh'}
+                      </button>
+                    </div>
+
+                    <div className="evaluation-explanation">
+                      <p>
+                        <strong>Intent:</strong> Whether the model correctly
+                        identifies the customer's request category.
+                      </p>
+                      <p>
+                        <strong>Urgency:</strong> Whether the urgency level
+                        matches the expected label.
+                      </p>
+                      <p>
+                        <strong>Human review:</strong> Whether the model
+                        correctly decides if a person should review the case.
+                      </p>
+                      <p>
+                        <strong>All-fields accuracy:</strong> Whether intent,
+                        urgency, and human-review decision are all correct for
+                        the same test case.
+                      </p>
+                    </div>
+
+                    <p className="muted evaluation-disclaimer">
+                      These scores describe the saved benchmark datasets. They
+                      do not guarantee the same accuracy on unseen customer
+                      messages.
+                    </p>
+                  </section>
+                </>
+              ) : (
+                <section className="panel analytics-message">
+                  <h3>No evaluation reports loaded</h3>
+                  <p>
+                    Check that both evaluation report files exist and the
+                    backend /evaluation endpoint is available.
+                  </p>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={loadEvaluation}
+                  >
+                    Load evaluation reports
+                  </button>
+                </section>
+              )}
+
+              <footer>
+                <span>ShopFlow AI</span>
+                <span>Results from saved evaluation benchmark reports</span>
+              </footer>
+            </>
           ) : (
-
             /* SUPPORT WORKSPACE */
             <>
               <header className="topbar">
@@ -589,14 +1233,18 @@ function App() {
                   <span className="metric-icon">✉</span>
                   <p>Message analysis</p>
                   <h3>AI classification</h3>
-                  <span className="metric-note">Intent · urgency · review</span>
+                  <span className="metric-note">
+                    Intent · urgency · review
+                  </span>
                 </article>
 
                 <article className="metric-card">
                   <span className="metric-icon">▣</span>
                   <p>Order intelligence</p>
                   <h3>Order lookup</h3>
-                  <span className="metric-note">Status · delivery · amount</span>
+                  <span className="metric-note">
+                    Status · delivery · amount
+                  </span>
                 </article>
 
                 <article className="metric-card">
@@ -618,7 +1266,8 @@ function App() {
                   </div>
 
                   <p className="muted">
-                    Enter a support request or start with one of the sample messages.
+                    Enter a support request or start with one of the sample
+                    messages.
                   </p>
 
                   <label htmlFor="customer-message">CUSTOMER MESSAGE</label>
@@ -676,7 +1325,9 @@ function App() {
                         Analyzing message...
                       </>
                     ) : (
-                      <>Analyze message <span>→</span></>
+                      <>
+                        Analyze message <span>→</span>
+                      </>
                     )}
                   </button>
 
@@ -696,7 +1347,11 @@ function App() {
                         !result ? '' : result.error ? 'error' : 'success'
                       }`}
                     >
-                      {!result ? 'READY' : result.error ? 'FAILED' : 'AI COMPLETE'}
+                      {!result
+                        ? 'READY'
+                        : result.error
+                          ? 'FAILED'
+                          : 'AI COMPLETE'}
                     </span>
                   </div>
 
@@ -715,7 +1370,8 @@ function App() {
                       <h3>Analysis failed</h3>
                       <p>{result.error}</p>
                       <p className="muted">
-                        Check that FastAPI and Ollama are running, then try again.
+                        Check that FastAPI and Ollama are running, then try
+                        again.
                       </p>
                     </div>
                   ) : (

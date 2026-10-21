@@ -162,3 +162,31 @@ def test_review_case_not_found():
             "/review-cases/999999/complete"
         )
         assert response.status_code == 404
+
+
+def test_review_analytics_endpoint():
+    """Analytics endpoint returns correctly structured metrics."""
+    with TestClient(app) as client:
+        response = client.get("/analytics")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert {
+        "total_cases",
+        "pending_cases",
+        "reviewed_cases",
+        "high_urgency_cases",
+        "intent_distribution",
+        "status_distribution",
+    }.issubset(data.keys())
+
+    assert data["total_cases"] == (
+        data["pending_cases"] + data["reviewed_cases"]
+    )
+
+    assert data["total_cases"] >= 0
+    assert data["high_urgency_cases"] >= 0
+    assert isinstance(data["intent_distribution"], list)
+    assert isinstance(data["status_distribution"], list)

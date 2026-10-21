@@ -152,3 +152,54 @@ def mark_review_case_completed(review_id: int):
         ).fetchone()
 
     return dict(row)
+
+
+def get_review_analytics():
+    """Return aggregate analytics for saved human-review cases."""
+    with get_connection() as connection:
+        totals = connection.execute("""
+            SELECT
+                COUNT(*) AS total_cases,
+                SUM(CASE
+                    WHEN review_status = 'pending' THEN 1
+                    ELSE 0
+                END) AS pending_cases,
+                SUM(CASE
+                    WHEN review_status = 'reviewed' THEN 1
+                    ELSE 0
+                END) AS reviewed_cases,
+                SUM(CASE
+                    WHEN LOWER(urgency) = 'high' THEN 1
+                    ELSE 0
+                END) AS high_urgency_cases
+            FROM review_cases
+        """).fetchone()
+
+        intent_rows = connection.execute("""
+            SELECT intent, COUNT(*) AS count
+            FROM review_cases
+            GROUP BY intent
+            ORDER BY count DESC, intent ASC
+        """).fetchall()
+
+        status_rows = connection.execute("""
+            SELECT review_status, COUNT(*) AS count
+            FROM review_cases
+            GROUP BY review_status
+            ORDER BY review_status ASC
+        """).fetchall()
+
+    return {
+        "total_cases": totals["total_cases"] or 0,
+        "pending_cases": totals["pending_cases"] or 0,
+        "reviewed_cases": totals["reviewed_cases"] or 0,
+        "high_urgency_cases": totals["high_urgency_cases"] or 0,
+        "intent_distribution": [
+            {"intent": row["intent"], "count": row["count"]}
+            for row in intent_rows
+        ],
+        "status_distribution": [
+            {"status": row["review_status"], "count": row["count"]}
+            for row in status_rows
+        ],
+    }
