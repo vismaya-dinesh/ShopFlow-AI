@@ -2,6 +2,8 @@
 import { useState } from 'react'
 import './App.css'
 
+const API_URL = 'http://localhost:8000'
+
 const sampleMessages = [
   "My order ORD-1002 hasn't arrived. Can you check it?",
   'I received the wrong product instead of what I ordered.',
@@ -20,6 +22,12 @@ function App() {
   const [orderError, setOrderError] = useState('')
   const [isSearchingOrder, setIsSearchingOrder] = useState(false)
 
+  const [reviewCases, setReviewCases] = useState([])
+  const [reviewError, setReviewError] = useState('')
+  const [isLoadingReviews, setIsLoadingReviews] = useState(false)
+  const [completingReviewId, setCompletingReviewId] = useState(null)
+  const [reviewFilter, setReviewFilter] = useState('pending')
+
   async function handleOrderSearch(event) {
     event.preventDefault()
 
@@ -32,18 +40,17 @@ function App() {
 
     try {
       const response = await fetch(
-        `http://localhost:8000/orders/${encodeURIComponent(id)}`
+        `${API_URL}/orders/${encodeURIComponent(id)}`
       )
 
-      if (!response.ok) {
-        if (response.status === 404) {
-          throw new Error('Order not found. Check the order ID and try again.')
-        }
+      const data = await response.json()
 
-        throw new Error('Could not retrieve the order. Please try again.')
+      if (!response.ok) {
+        throw new Error(
+          data.detail || 'Could not retrieve the order. Please try again.'
+        )
       }
 
-      const data = await response.json()
       setOrderResult(data)
     } catch (error) {
       setOrderError(
@@ -63,14 +70,10 @@ function App() {
     setResult(null)
 
     try {
-      const response = await fetch('http://localhost:8000/classify', {
+      const response = await fetch(`${API_URL}/classify`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: message.trim(),
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: message.trim() }),
       })
 
       const data = await response.json()
@@ -83,19 +86,22 @@ function App() {
 
       setResult({
         message: message.trim(),
-        status: 'AI analysis complete',
         intent: data.intent,
         urgency: data.urgency,
         humanReview: data.requires_human_review
           ? 'Required'
           : 'Not required',
       })
+
+      // Refresh the queue if the backend saved a human-review case.
+      if (data.requires_human_review) {
+        loadReviewCases()
+      }
     } catch (error) {
       console.error('Classification error:', error)
 
       setResult({
         message: message.trim(),
-        status: 'Analysis failed',
         error:
           error.message ||
           'Could not connect to the AI service. Check that the API is running.',
@@ -104,6 +110,80 @@ function App() {
       setIsAnalyzing(false)
     }
   }
+
+  async function loadReviewCases() {
+    setIsLoadingReviews(true)
+    setReviewError('')
+
+    try {
+      const response = await fetch(`${API_URL}/review-cases`)
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Could not load review cases.')
+      }
+
+      setReviewCases(data)
+    } catch (error) {
+      setReviewError(
+        error instanceof TypeError
+          ? 'Could not connect to the backend. Make sure FastAPI is running.'
+          : error.message
+      )
+    } finally {
+      setIsLoadingReviews(false)
+    }
+  }
+
+  async function handleCompleteReview(reviewId) {
+    if (completingReviewId !== null) return
+
+    setCompletingReviewId(reviewId)
+    setReviewError('')
+
+    try {
+      const response = await fetch(
+        `${API_URL}/review-cases/${reviewId}/complete`,
+        { method: 'POST' }
+      )
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Could not complete this review.')
+      }
+
+      // Update the case locally using the server's response.
+      setReviewCases((currentCases) =>
+        currentCases.map((reviewCase) =>
+          reviewCase.review_id === reviewId ? data : reviewCase
+        )
+      )
+    } catch (error) {
+      setReviewError(
+        error instanceof TypeError
+          ? 'Could not connect to the backend. Make sure FastAPI is running.'
+          : error.message
+      )
+    } finally {
+      setCompletingReviewId(null)
+    }
+  }
+
+  function openReviews() {
+    setActiveView('reviews')
+    loadReviewCases()
+  }
+
+  const pendingCount = reviewCases.filter(
+    (reviewCase) => reviewCase.review_status === 'pending'
+  ).length
+
+  const filteredReviewCases = reviewCases.filter((reviewCase) =>
+    reviewFilter === 'all'
+      ? true
+      : reviewCase.review_status === reviewFilter
+  )
 
   return (
     <div className="app-shell">
@@ -132,7 +212,15 @@ function App() {
           ▤ <span>Order lookup</span>
         </button>
 
-        <div className="nav-item">⌁ <span>AI evaluations</span></div>
+        <button
+          className={`nav-item ${activeView === 'reviews' ? 'active' : ''}`}
+          onClick={openReviews}
+        >
+          ⌁ <span>Human review</span>
+          {pendingCount > 0 && (
+            <span className="review-nav-count">{pendingCount}</span>
+          )}
+        </button>
 
         <div className="sidebar-bottom">
           <span className="status-dot" />
@@ -143,6 +231,8 @@ function App() {
 
       <main className="main-content">
         <div key={activeView} className="view-transition">
+
+          {/* ORDER LOOKUP */}
           {activeView === 'orders' ? (
             <section className="panel order-lookup-panel">
               <div className="panel-heading">
@@ -157,10 +247,7 @@ function App() {
                 Enter an order ID to view its current status and delivery details.
               </p>
 
-              <form
-                className="order-search-form"
-                onSubmit={handleOrderSearch}
-              >
+              <form className="order-search-form" onSubmit={handleOrderSearch}>
                 <label htmlFor="order-id">ORDER ID</label>
 
                 <div className="order-search-row">
@@ -182,16 +269,7 @@ function App() {
                     type="submit"
                     disabled={isSearchingOrder || !orderId.trim()}
                   >
-                    {isSearchingOrder ? (
-                      <>
-                        <span className="loading-spinner" />
-                        Searching...
-                      </>
-                    ) : (
-                      <>
-                        Search order <span>→</span>
-                      </>
-                    )}
+                    {isSearchingOrder ? 'Searching...' : 'Search order →'}
                   </button>
 
                   <button
@@ -222,7 +300,6 @@ function App() {
                       <p className="eyebrow">ORDER DETAILS</p>
                       <h3>{orderResult.order_id}</h3>
                     </div>
-
                     <span
                       className={`order-status-badge ${orderResult.order_status.toLowerCase()}`}
                     >
@@ -234,19 +311,16 @@ function App() {
                     <span>Product</span>
                     <strong>{orderResult.item_name}</strong>
                   </div>
-
                   <div className="order-detail-row">
                     <span>Customer email</span>
                     <strong>{orderResult.customer_email}</strong>
                   </div>
-
                   <div className="order-detail-row">
                     <span>Payment status</span>
                     <strong className="payment-status-badge">
                       {orderResult.payment_status}
                     </strong>
                   </div>
-
                   <div className="order-detail-row">
                     <span>Amount</span>
                     <strong>
@@ -254,12 +328,10 @@ function App() {
                       {Number(orderResult.total_amount).toFixed(2)}
                     </strong>
                   </div>
-
                   <div className="order-detail-row">
                     <span>Order date</span>
                     <strong>{orderResult.order_date}</strong>
                   </div>
-
                   <div className="order-detail-row">
                     <span>Expected delivery</span>
                     <strong>
@@ -278,14 +350,223 @@ function App() {
                 </div>
               )}
             </section>
+
+          ) : activeView === 'reviews' ? (
+
+            /* HUMAN REVIEW QUEUE */
+            <>
+              <header className="topbar">
+                <div>
+                  <p className="eyebrow">CUSTOMER OPERATIONS / OVERSIGHT</p>
+                  <h1>Human review queue</h1>
+                </div>
+                <div className="environment-tag">
+                  <span className="status-dot" /> Review management
+                </div>
+              </header>
+
+              <section className="welcome">
+                <div>
+                  <p className="eyebrow">HUMAN-IN-THE-LOOP WORKFLOW</p>
+                  <h2>Keep people in the loop.</h2>
+                  <p>
+                    Review customer messages flagged by the AI before
+                    considering them handled.
+                  </p>
+                </div>
+                <div className="welcome-icon">✓</div>
+              </section>
+
+              <section className="metrics">
+                <article className="metric-card">
+                  <span className="metric-icon">⌁</span>
+                  <p>Pending reviews</p>
+                  <h3>{pendingCount}</h3>
+                  <span className="metric-note">Awaiting human attention</span>
+                </article>
+
+                <article className="metric-card">
+                  <span className="metric-icon">✓</span>
+                  <p>Reviewed cases</p>
+                  <h3>
+                    {reviewCases.filter(
+                      (item) => item.review_status === 'reviewed'
+                    ).length}
+                  </h3>
+                  <span className="metric-note">Completed reviews</span>
+                </article>
+
+                <article className="metric-card">
+                  <span className="metric-icon">▤</span>
+                  <p>Total cases</p>
+                  <h3>{reviewCases.length}</h3>
+                  <span className="metric-note">Loaded from the database</span>
+                </article>
+              </section>
+
+              <section className="panel review-queue-panel">
+                <div className="panel-heading review-queue-heading">
+                  <div>
+                    <p className="eyebrow">CASE MANAGEMENT</p>
+                    <h2>Customer cases</h2>
+                  </div>
+
+                  <button
+                    className="clear-button"
+                    type="button"
+                    onClick={loadReviewCases}
+                    disabled={isLoadingReviews}
+                  >
+                    {isLoadingReviews ? 'Refreshing...' : '↻ Refresh'}
+                  </button>
+                </div>
+
+                <div className="review-filters">
+                  <button
+                    type="button"
+                    className={`review-filter ${reviewFilter === 'pending' ? 'active' : ''}`}
+                    onClick={() => setReviewFilter('pending')}
+                  >
+                    Pending
+                  </button>
+                  <button
+                    type="button"
+                    className={`review-filter ${reviewFilter === 'reviewed' ? 'active' : ''}`}
+                    onClick={() => setReviewFilter('reviewed')}
+                  >
+                    Reviewed
+                  </button>
+                  <button
+                    type="button"
+                    className={`review-filter ${reviewFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => setReviewFilter('all')}
+                  >
+                    All cases
+                  </button>
+                </div>
+
+                {reviewError && (
+                  <div className="review-error" role="alert">
+                    <strong>Something went wrong</strong>
+                    <p>{reviewError}</p>
+                    <button
+                      className="clear-button"
+                      type="button"
+                      onClick={loadReviewCases}
+                    >
+                      Try again
+                    </button>
+                  </div>
+                )}
+
+                {isLoadingReviews && reviewCases.length === 0 ? (
+                  <div className="review-empty-state">
+                    <span className="loading-spinner" />
+                    <p>Loading review cases...</p>
+                  </div>
+                ) : filteredReviewCases.length === 0 ? (
+                  <div className="review-empty-state">
+                    <div className="empty-icon">
+                      {reviewFilter === 'pending' ? '✓' : '⌁'}
+                    </div>
+                    <h3>
+                      {reviewFilter === 'pending'
+                        ? 'No pending reviews'
+                        : 'No cases found'}
+                    </h3>
+                    <p>
+                      {reviewFilter === 'pending'
+                        ? 'New cases requiring human attention will appear here.'
+                        : 'Try another filter or refresh the queue.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="review-case-list">
+                    {filteredReviewCases.map((reviewCase) => (
+                      <article
+                        className="review-case"
+                        key={reviewCase.review_id}
+                      >
+                        <div className="review-case-top">
+                          <div>
+                            <p className="eyebrow">
+                              REVIEW #{reviewCase.review_id}
+                            </p>
+                            <span
+                              className={`review-status ${reviewCase.review_status}`}
+                            >
+                              {reviewCase.review_status === 'pending'
+                                ? 'Pending review'
+                                : 'Reviewed'}
+                            </span>
+                          </div>
+
+                          <span
+                            className={`urgency-badge ${reviewCase.urgency.toLowerCase()}`}
+                          >
+                            {reviewCase.urgency} urgency
+                          </span>
+                        </div>
+
+                        <p className="review-customer-message">
+                          {reviewCase.customer_message}
+                        </p>
+
+                        <div className="review-case-details">
+                          <div>
+                            <span>Predicted intent</span>
+                            <strong>{reviewCase.intent.replaceAll('_', ' ')}</strong>
+                          </div>
+                          <div>
+                            <span>Created</span>
+                            <strong>{reviewCase.created_at}</strong>
+                          </div>
+                        </div>
+
+                        <div className="review-case-actions">
+                          {reviewCase.review_status === 'pending' ? (
+                            <button
+                              className="primary-button"
+                              type="button"
+                              onClick={() =>
+                                handleCompleteReview(reviewCase.review_id)
+                              }
+                              disabled={completingReviewId !== null}
+                            >
+                              {completingReviewId === reviewCase.review_id
+                                ? 'Completing review...'
+                                : '✓ Mark as reviewed'}
+                            </button>
+                          ) : (
+                            <p className="review-completed-note">
+                              ✓ Reviewed
+                              {reviewCase.reviewed_at
+                                ? ` on ${reviewCase.reviewed_at}`
+                                : ''}
+                            </p>
+                          )}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <footer>
+                <span>ShopFlow AI</span>
+                <span>AI-assisted support · Human oversight matters</span>
+              </footer>
+            </>
+
           ) : (
+
+            /* SUPPORT WORKSPACE */
             <>
               <header className="topbar">
                 <div>
                   <p className="eyebrow">CUSTOMER OPERATIONS / WORKSPACE</p>
                   <h1>Support workspace</h1>
                 </div>
-
                 <div className="environment-tag">
                   <span className="status-dot" /> Local AI
                 </div>
@@ -300,7 +581,6 @@ function App() {
                     cases that need human attention.
                   </p>
                 </div>
-
                 <div className="welcome-icon">✳</div>
               </section>
 
@@ -396,9 +676,7 @@ function App() {
                         Analyzing message...
                       </>
                     ) : (
-                      <>
-                        Analyze message <span>→</span>
-                      </>
+                      <>Analyze message <span>→</span></>
                     )}
                   </button>
 
@@ -413,21 +691,12 @@ function App() {
                       <p className="eyebrow">STEP 02</p>
                       <h2>Analysis results</h2>
                     </div>
-
                     <span
                       className={`result-status ${
-                        !result
-                          ? ''
-                          : result.error
-                            ? 'error'
-                            : 'success'
+                        !result ? '' : result.error ? 'error' : 'success'
                       }`}
                     >
-                      {!result
-                        ? 'READY'
-                        : result.error
-                          ? 'FAILED'
-                          : 'AI COMPLETE'}
+                      {!result ? 'READY' : result.error ? 'FAILED' : 'AI COMPLETE'}
                     </span>
                   </div>
 
@@ -462,19 +731,27 @@ function App() {
                         <span>Intent</span>
                         <strong>{result.intent}</strong>
                       </div>
-
                       <div className="result-field">
                         <span>Urgency</span>
                         <strong>{result.urgency}</strong>
                       </div>
-
                       <div className="result-field">
                         <span>Human review</span>
                         <strong>{result.humanReview}</strong>
                       </div>
 
+                      {result.humanReview === 'Required' && (
+                        <button
+                          className="clear-button"
+                          type="button"
+                          onClick={openReviews}
+                        >
+                          Open human review queue →
+                        </button>
+                      )}
+
                       <p className="muted">
-                        Classification is AI-generated. Human review is still
+                        Classification is AI-generated. Human review remains
                         important for sensitive or uncertain customer cases.
                       </p>
                     </div>

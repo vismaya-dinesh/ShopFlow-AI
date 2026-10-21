@@ -28,6 +28,19 @@ def initialize_database():
             )
         """)
 
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS review_cases (
+                review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_message TEXT NOT NULL,
+                intent TEXT NOT NULL,
+                urgency TEXT NOT NULL,
+                requires_human_review INTEGER NOT NULL DEFAULT 1,
+                review_status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                reviewed_at TEXT
+            )
+        """)
+
         orders = [
             (
                 "ORD-1001", "alex@example.com", "Wireless Headphones",
@@ -64,3 +77,78 @@ def get_order(order_id: str):
         ).fetchone()
 
     return dict(row) if row else None
+
+
+def create_review_case(
+    customer_message: str,
+    intent: str,
+    urgency: str,
+):
+    with get_connection() as connection:
+        cursor = connection.execute("""
+            INSERT INTO review_cases (
+                customer_message,
+                intent,
+                urgency,
+                requires_human_review,
+                review_status
+            )
+            VALUES (?, ?, ?, 1, 'pending')
+        """, (customer_message, intent, urgency))
+
+        review_id = cursor.lastrowid
+
+        row = connection.execute(
+            "SELECT * FROM review_cases WHERE review_id = ?",
+            (review_id,)
+        ).fetchone()
+
+    return dict(row)
+
+
+def get_review_cases():
+    with get_connection() as connection:
+        rows = connection.execute("""
+            SELECT *
+            FROM review_cases
+            ORDER BY
+                CASE review_status
+                    WHEN 'pending' THEN 0
+                    ELSE 1
+                END,
+                created_at DESC,
+                review_id DESC
+        """).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def get_review_case(review_id: int):
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM review_cases WHERE review_id = ?",
+            (review_id,)
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
+def mark_review_case_completed(review_id: int):
+    with get_connection() as connection:
+        cursor = connection.execute("""
+            UPDATE review_cases
+            SET review_status = 'reviewed',
+                reviewed_at = CURRENT_TIMESTAMP
+            WHERE review_id = ?
+              AND review_status = 'pending'
+        """, (review_id,))
+
+        if cursor.rowcount == 0:
+            return None
+
+        row = connection.execute(
+            "SELECT * FROM review_cases WHERE review_id = ?",
+            (review_id,)
+        ).fetchone()
+
+    return dict(row)
