@@ -84,3 +84,37 @@ def test_classifier_accepts_valid_prediction(monkeypatch):
     result = classify_message("Where is my order?")
 
     assert result == prediction
+
+
+def test_classifier_handles_malformed_ollama_json(monkeypatch):
+    import api.classifier as classifier
+
+    response = mock_ollama_response({})
+    response.read.return_value = b'{"response": "not valid json"}'
+
+    monkeypatch.setattr(
+        classifier.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: response,
+    )
+
+    with pytest.raises(RuntimeError, match="could not produce a valid response"):
+        classify_message("Where is my order?")
+
+
+def test_classifier_handles_ollama_connection_failure(monkeypatch):
+    import urllib.error
+
+    import api.classifier as classifier
+
+    def raise_connection_error(*args, **kwargs):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr(
+        classifier.urllib.request,
+        "urlopen",
+        raise_connection_error,
+    )
+
+    with pytest.raises(RuntimeError, match="Check that Ollama is running"):
+        classify_message("Where is my order?")
