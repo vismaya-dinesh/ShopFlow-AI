@@ -77,17 +77,25 @@ Customer message:
         method="POST",
     )
 
+    
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             result = json.loads(response.read().decode("utf-8"))
 
         prediction = json.loads(result["response"])
 
-    except Exception as error:
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+    ) as error:
         raise RuntimeError(
             "The local AI classifier could not produce a valid response. "
             "Check that Ollama is running and the model is available."
         ) from error
+
 
     intent = prediction.get("intent")
     urgency = prediction.get("urgency")
@@ -107,4 +115,3 @@ Customer message:
         "urgency": urgency.strip().lower(),
         "requires_human_review": requires_review,
     }
-    
